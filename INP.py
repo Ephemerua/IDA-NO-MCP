@@ -9,6 +9,7 @@ import ida_xref
 import ida_segment
 import ida_bytes
 import ida_entry
+import ida_kernwin
 import idautils
 import idc
 
@@ -19,6 +20,15 @@ def get_idb_directory():
         import ida_loader
         idb_path = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
     return os.path.dirname(idb_path) if idb_path else os.getcwd()
+
+def ask_custom_export_path(default_path):
+    """弹出对话框让用户选择导出目录"""
+    if default_path != get_idb_directory():
+        path = ida_kernwin.ask_file(default_path, ".ida_exported", "Select export directory")
+    else:
+        path = default_path
+    print("export path is " + path)
+    return path if path else default_path
 
 def ensure_dir(path):
     """确保目录存在"""
@@ -298,7 +308,8 @@ def main():
         print("[+] Hex-Rays decompiler initialized")
     
     idb_dir = get_idb_directory()
-    export_dir = os.path.join(idb_dir, "export-for-ai")
+    default_export_dir = os.path.join(idb_dir, "export-for-ai")
+    export_dir = ask_custom_export_path(default_export_dir)
     ensure_dir(export_dir)
     
     print("[+] Export directory: {}".format(export_dir))
