@@ -14,11 +14,34 @@ Text, Source Code, and Shell are LLM's native languages.
 
 AI is evolving rapidly with no fixed patterns—tools should stay simple. Export IDA decompilation results as source files, drop them into any AI IDE (Cursor / Claude Code / ...), and naturally benefit from indexing, parallelism, chunking (for huge decompiled functions), and other optimizations.
 
-## Usage
+## Installation & Usage
 
-Copy the entire `INP.py` → Paste into IDA Python console → Press Enter
+### Method 1: As an IDA Plugin (Recommended)
 
-Export directory: `{IDB_directory}/export-for-ai/`
+Symlink `INP.py` to IDA's plugins directory to enable auto-loading and hotkey support.
+
+```bash
+# Modify paths based on your installation
+ln -s /path/to/IDA-NO-MCP/INP.py /Applications/IDA\ Professional\ 9.0/Contents/MacOS/plugins/INP.py
+```
+
+- **Hotkey**: `Ctrl-Shift-E`
+- **Menu**: `Edit -> AI Export`
+
+### Method 2: Command Line Mode (Headless, IDA 9.x+ only)
+
+Leverage IDA 9.x's Python bindings to run export tasks directly from the terminal.
+
+```bash
+python3 INP.py -i <input_file> [-o <output_dir>]
+```
+
+- `-i, --input`: **(Required)** Path to the IDB or binary file.
+- `-o, --output`: **(Optional)** Specify export directory, defaults to `export-for-ai/` in the IDB directory.
+
+### Method 3: Script Execution
+
+Copy the entire `INP.py` → Paste into IDA Python console → Press Enter.
 
 ## Exported Content
 
