@@ -2,6 +2,8 @@
 # IDAPython script to export decompiled functions, strings, memory, imports and exports for AI analysis
 
 import os
+import argparse
+import ida_idaapi
 import ida_hexrays
 import ida_funcs
 import ida_nalt
@@ -27,7 +29,6 @@ def ask_custom_export_path(default_path):
         path = ida_kernwin.ask_file(default_path, ".ida_exported", "Select export directory")
     else:
         path = default_path
-    print("export path is " + path)
     return path if path else default_path
 
 def ensure_dir(path):
@@ -293,12 +294,22 @@ def export_memory(export_dir):
     print("    Total bytes exported: {} ({:.2f} MB)".format(total_bytes, total_bytes / (1024*1024)))
     print("    Files created: {}".format(file_count))
 
-def main():
+def main(argv=None):
     """主函数"""
     print("=" * 60)
     print("IDA Export for AI Analysis")
     print("=" * 60)
+
+    parser = argparse.ArgumentParser(description='IDA Export for AI Analysis')
+    parser.add_argument('-o', '--output', help='Output directory for exported data')
     
+    # Handle both standalone script execution and IDA plugin execution
+    if argv is None:
+        import idc
+        argv = idc.ARGV[1:] if len(idc.ARGV) > 1 else []
+    
+    args, _ = parser.parse_known_args(argv)
+
     if not ida_hexrays.init_hexrays_plugin():
         print("[!] Hex-Rays decompiler is not available!")
         print("[!] Strings will still be exported, but no decompilation.")
@@ -309,7 +320,12 @@ def main():
     
     idb_dir = get_idb_directory()
     default_export_dir = os.path.join(idb_dir, "export-for-ai")
-    export_dir = ask_custom_export_path(default_export_dir)
+    
+    if args.output:
+        export_dir = args.output
+    else:
+        export_dir = ask_custom_export_path(default_export_dir)
+    
     ensure_dir(export_dir)
     
     print("[+] Export directory: {}".format(export_dir))
@@ -340,6 +356,25 @@ def main():
     print("[+] Export completed!")
     print("    Output directory: {}".format(export_dir))
     print("=" * 60)
+
+class AIExportPlugin(ida_idaapi.plugin_t):
+    flags = ida_idaapi.PLUGIN_UNL
+    comment = "Export IDA data for AI analysis"
+    help = "Exports decompiled functions, strings, memory, imports and exports"
+    wanted_name = "AI Export"
+    wanted_hotkey = "Ctrl-Shift-E"
+
+    def init(self):
+        return ida_idaapi.PLUGIN_KEEP
+
+    def run(self, arg):
+        main([])
+
+    def term(self):
+        pass
+
+def PLUGIN_ENTRY():
+    return AIExportPlugin()
 
 if __name__ == "__main__":
     main()
