@@ -1,6 +1,7 @@
 # ida_export_for_ai.py
 # IDAPython script to export decompiled functions, strings, memory, imports and exports for AI analysis
 
+import idapro
 import os
 import argparse
 import ida_idaapi
@@ -13,7 +14,9 @@ import ida_bytes
 import ida_entry
 import ida_kernwin
 import idautils
+import ida_auto
 import idc
+import sys
 
 def get_idb_directory():
     """获取 IDB 文件所在目录"""
@@ -294,7 +297,7 @@ def export_memory(export_dir):
     print("    Total bytes exported: {} ({:.2f} MB)".format(total_bytes, total_bytes / (1024*1024)))
     print("    Files created: {}".format(file_count))
 
-def main(argv=None):
+def main():
     """主函数"""
     print("=" * 60)
     print("IDA Export for AI Analysis")
@@ -302,14 +305,20 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description='IDA Export for AI Analysis')
     parser.add_argument('-o', '--output', help='Output directory for exported data')
-    
+    parser.add_argument('-i', '--input', help='Input binary file')
     # Handle both standalone script execution and IDA plugin execution
-    if argv is None:
+    if sys.argv is None:
         import idc
         argv = idc.ARGV[1:] if len(idc.ARGV) > 1 else []
     
-    args, _ = parser.parse_known_args(argv)
+    args, _ = parser.parse_known_args(sys.argv)
+    print("[DBG] input is {}, output is {}".format(args.input, args.output))
+    idapro.open_database(args.input, True)
+    ida_auto.auto_wait()
+    do_dump(args.output)
 
+
+def do_dump(output_path = None):
     if not ida_hexrays.init_hexrays_plugin():
         print("[!] Hex-Rays decompiler is not available!")
         print("[!] Strings will still be exported, but no decompilation.")
@@ -321,8 +330,8 @@ def main(argv=None):
     idb_dir = get_idb_directory()
     default_export_dir = os.path.join(idb_dir, "export-for-ai")
     
-    if args.output:
-        export_dir = args.output
+    if output_path:
+        export_dir = output_path
     else:
         export_dir = ask_custom_export_path(default_export_dir)
     
@@ -365,10 +374,11 @@ class AIExportPlugin(ida_idaapi.plugin_t):
     wanted_hotkey = "Ctrl-Shift-E"
 
     def init(self):
+        print(">>INP loaded<<")
         return ida_idaapi.PLUGIN_KEEP
 
     def run(self, arg):
-        main([])
+        do_dump()
 
     def term(self):
         pass
