@@ -1,7 +1,11 @@
 # ida_export_for_ai.py
 # IDAPython script to export decompiled functions, strings, memory, imports and exports for AI analysis
 
-import idapro
+try:
+    import idapro
+except:
+    pass
+
 import os
 import argparse
 import ida_idaapi
@@ -15,6 +19,7 @@ import ida_entry
 import ida_kernwin
 import idautils
 import ida_auto
+import ida_loader
 import idc
 import sys
 
@@ -79,6 +84,8 @@ def export_decompiled_functions(export_dir):
     failed_funcs = []
     
     for func_ea in idautils.Functions():
+        print("decompiling {}".format(func_ea))
+
         total_funcs += 1
         func_name = idc.get_func_name(func_ea)
         
@@ -316,7 +323,7 @@ def main():
     idapro.open_database(args.input, True)
     ida_auto.auto_wait()
     do_dump(args.output)
-
+    idapro.close_database()
 
 def do_dump(output_path = None):
     if not ida_hexrays.init_hexrays_plugin():
