@@ -82,12 +82,15 @@ def export_decompiled_functions(export_dir):
     total_funcs = 0
     exported_funcs = 0
     failed_funcs = []
-    
-    for func_ea in idautils.Functions():
-        print("decompiling {}".format(func_ea))
 
-        total_funcs += 1
+    plt_seg = ida_segment.get_segm_by_name(".plt")
+    for func_ea in idautils.Functions():
         func_name = idc.get_func_name(func_ea)
+        if plt_seg and \
+            (func_ea >= plt_seg.start_ea and func_ea < plt_seg.end_ea):
+            print("skip .plt stub for  {}".format(func_name))
+            continue
+        total_funcs += 1
         
         try:
             dec_obj = ida_hexrays.decompile(func_ea)
