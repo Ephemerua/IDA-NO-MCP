@@ -84,11 +84,17 @@ def export_decompiled_functions(export_dir):
     failed_funcs = []
 
     plt_seg = ida_segment.get_segm_by_name(".plt")
+    plt_got_seg = ida_segment.get_segm_by_name(".plt.got")
+
     for func_ea in idautils.Functions():
         func_name = idc.get_func_name(func_ea)
         if plt_seg and \
             (func_ea >= plt_seg.start_ea and func_ea < plt_seg.end_ea):
             print("skip .plt stub for  {}".format(func_name))
+            continue
+        if plt_got_seg and \
+            (func_ea >= plt_got_seg.start_ea and func_ea < plt_got_seg.end_ea):
+            print("skip .plt.got stub for  {}".format(func_name))
             continue
         total_funcs += 1
         
