@@ -45,6 +45,40 @@ python3 INP.py -i <输入文件> [-o <导出目录>]
 
 复制 `INP.py` 全部内容 → 粘贴到 IDA Python 窗口 → 回车。
 
+### 方式 4：HTTP 服务模式 (Server/Client)
+
+适合将 IDA 部署在服务器，本地通过客户端提交文件进行分析。
+
+**1. 启动服务端**
+
+安装依赖：
+```bash
+pip install -r requirements.txt
+```
+
+启动服务（支持指定 IP 和端口）：
+```bash
+# 默认监听 127.0.0.1:9753
+python3 server.py
+
+# 指定 IP 和端口，开启调试日志
+python3 server.py -H 0.0.0.0 -p 8080 -d
+```
+
+> **注意**：如果 `INP.py` 需要特定的 IDA Python 环境，请设置环境变量 `IDA_PYTHON`。
+
+**2. 客户端调用**
+
+使用示例脚本提交任务，结果将自动下载并保存为 ZIP 包（解压后位于 `ida_export/` 目录）：
+
+```bash
+# 基本用法
+python3 client_example.py -i ./target_binary
+
+# 指定服务端地址
+python3 client_example.py -i ./target_binary -H 192.168.1.100 -p 8080 -o result.zip
+```
+
 ## 导出内容
 
 | 文件/目录 | 内容 |
