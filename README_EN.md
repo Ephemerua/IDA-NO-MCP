@@ -38,10 +38,66 @@ python3 INP.py -i <input_file> [-o <output_dir>]
 
 - `-i, --input`: **(Required)** Path to the IDB or binary file.
 - `-o, --output`: **(Optional)** Specify export directory, defaults to `export-for-ai/` in the IDB directory.
+- By default, the script also saves the current IDB to `idb/` under the `INP.py` directory (auto-created if missing).
 
 ### Method 3: Script Execution
 
 Copy the entire `INP.py` → Paste into IDA Python console → Press Enter.
+
+### Method 4: HTTP Service Mode (Server/Client)
+
+Useful when IDA runs on a remote server and you submit files from a local client.
+
+**1. Start server**
+
+Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+Start server:
+```bash
+# default: 127.0.0.1:9753
+python3 server.py
+
+# custom host/port + debug logs
+python3 server.py -H 0.0.0.0 -p 8080 -d
+```
+
+> **Note**: If `INP.py` requires a specific IDA Python runtime, set `IDA_PYTHON`.
+
+**2. Client call**
+
+```bash
+# basic usage
+python3 client_example.py -i ./target_binary
+
+# custom server address
+python3 client_example.py -i ./target_binary -H 192.168.1.100 -p 8080 -o result.zip
+```
+
+**3. Server APIs**
+
+- `POST /analyze`: upload file and run analysis, returns zip on success.
+- `GET /health`: health check (includes `busy`).
+- `GET /status`: current/latest task status and streamed `INP.py` output (`stdout` / `stderr`).
+
+Typical `/status` fields:
+
+- `task_id`: incremental task id
+- `running`: whether analysis is in progress
+- `phase`: `idle` / `running` / `zipping` / `completed` / `failed`
+- `busy`: server lock state
+- `stdout` / `stderr`: captured output so far
+- `stdout_truncated` / `stderr_truncated`: whether output was trimmed
+
+Polling example:
+
+```bash
+curl http://127.0.0.1:9753/status
+```
+
+> **Concurrency model**: server runs in single-task mode. Concurrent `/analyze` requests are rejected with `429`.
 
 ## Exported Content
 

@@ -40,6 +40,7 @@ python3 INP.py -i <输入文件> [-o <导出目录>]
 
 - `-i, --input`: **(必填)** IDB 或二进制文件路径。
 - `-o, --output`: **(可选)** 指定导出目录，默认为 IDB 所在目录下的 `export-for-ai/`。
+- 默认会先保存一次 IDB 到 `INP.py` 所在目录下的 `idb/` 子目录（不存在会自动创建）。
 
 ### 方式 3：脚本运行
 
@@ -78,6 +79,29 @@ python3 client_example.py -i ./target_binary
 # 指定服务端地址
 python3 client_example.py -i ./target_binary -H 192.168.1.100 -p 8080 -o result.zip
 ```
+
+**3. 服务端接口**
+
+- `POST /analyze`：上传文件并开始分析，完成后返回 zip。
+- `GET /health`：健康检查（包含 `busy` 字段）。
+- `GET /status`：返回当前/最近一次任务状态与 `INP.py` 实时输出（`stdout` / `stderr`）。
+
+`/status` 典型字段：
+
+- `task_id`：任务递增 ID
+- `running`：是否正在执行
+- `phase`：`idle` / `running` / `zipping` / `completed` / `failed`
+- `busy`：服务是否正忙（与并发锁一致）
+- `stdout` / `stderr`：当前已采集输出
+- `stdout_truncated` / `stderr_truncated`：输出过长时是否被截断
+
+你可以在上传后轮询查看进度：
+
+```bash
+curl http://127.0.0.1:9753/status
+```
+
+> **并发限制**：服务端当前为单任务模式，同一时刻仅允许一个 `/analyze`。并发请求会返回 `429`。
 
 ## 导出内容
 

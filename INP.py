@@ -24,6 +24,19 @@ import idc
 import sys
 
 
+def get_script_directory():
+    """获取脚本文件所在目录"""
+    script_path = None
+    if "__file__" in globals() and __file__:
+        script_path = __file__
+    elif sys.argv and len(sys.argv) > 0:
+        script_path = sys.argv[0]
+
+    if not script_path:
+        return os.getcwd()
+    return os.path.dirname(os.path.realpath(script_path))
+
+
 def get_idb_directory():
     """获取 IDB 文件所在目录"""
     idb_path = ida_nalt.get_input_file_path()
@@ -49,6 +62,59 @@ def ensure_dir(path):
     """确保目录存在"""
     if not os.path.exists(path):
         os.makedirs(path)
+
+
+def guess_idb_extension():
+    """根据当前数据库状态推断后缀"""
+    try:
+        current_path = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
+        _, ext = os.path.splitext(current_path)
+        if ext.lower() in [".idb", ".i64"]:
+            return ext
+    except Exception:
+        pass
+
+    try:
+        import ida_ida
+
+        return ".i64" if ida_ida.inf_is_64bit() else ".idb"
+    except Exception:
+        return ".i64"
+
+
+def save_idb_to_default_directory():
+    """默认保存 IDB 到脚本目录下的 idb 子目录"""
+    script_dir = get_script_directory()
+    target_idb_dir = os.path.join(script_dir, "idb")
+    ensure_dir(target_idb_dir)
+
+    root_name = ida_nalt.get_root_filename() or "database"
+    target_path = os.path.join(target_idb_dir, root_name + guess_idb_extension())
+
+    save_errors = []
+
+    if hasattr(idc, "save_database"):
+        try:
+            save_result = idc.save_database(target_path, 0)
+            if save_result is not False:
+                return target_path
+            save_errors.append("idc.save_database returned False")
+        except Exception as e:
+            save_errors.append("idc.save_database failed: {}".format(e))
+
+    if hasattr(ida_loader, "save_database"):
+        try:
+            save_result = ida_loader.save_database(target_path, 0)
+            if save_result is not False:
+                return target_path
+            save_errors.append("ida_loader.save_database returned False")
+        except Exception as e:
+            save_errors.append("ida_loader.save_database failed: {}".format(e))
+
+    print("[!] Failed to save IDB to default directory")
+    for err in save_errors:
+        print("    - {}".format(err))
+    return None
 
 
 def get_callers(func_ea):
@@ -384,6 +450,13 @@ def main():
 
 
 def do_dump(output_path=None):
+    print("[*] Saving IDB to default path...")
+    saved_idb_path = save_idb_to_default_directory()
+    if saved_idb_path:
+        print("[+] IDB saved: {}".format(saved_idb_path))
+    else:
+        print("[!] Continue export without updating IDB file")
+
     if not ida_hexrays.init_hexrays_plugin():
         print("[!] Hex-Rays decompiler is not available!")
         print("[!] Strings will still be exported, but no decompilation.")
