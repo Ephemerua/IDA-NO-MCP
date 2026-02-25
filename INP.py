@@ -22,6 +22,52 @@ import ida_auto
 import ida_loader
 import idc
 import sys
+import signal
+
+
+CANCEL_REQUESTED = False
+CANCEL_SAVED = False
+
+
+class ExportCanceledError(Exception):
+    pass
+
+
+def register_cancel_signal_handlers():
+    def _cancel_handler(signum, frame):
+        global CANCEL_REQUESTED
+        CANCEL_REQUESTED = True
+        print("[!] Cancel signal received: {}".format(signum))
+
+    for sig in [signal.SIGINT, signal.SIGTERM]:
+        try:
+            signal.signal(sig, _cancel_handler)
+        except Exception:
+            pass
+
+
+def check_cancel_and_save():
+    global CANCEL_SAVED
+    if not CANCEL_REQUESTED:
+        return
+
+    print("[!] Cancel requested, saving database immediately...")
+    if not CANCEL_SAVED:
+        saved_idb_path = save_idb_to_default_directory()
+        if saved_idb_path:
+            print("[+] IDB saved on cancel: {}".format(saved_idb_path))
+        else:
+            print("[!] Failed to save IDB during cancel")
+        CANCEL_SAVED = True
+
+    raise ExportCanceledError("Canceled by user")
+
+
+def run_export_stage(stage_name, stage_fn, export_dir):
+    """统一执行导出阶段：打印阶段日志并执行函数。"""
+    print("[*] {}...".format(stage_name))
+    stage_fn(export_dir)
+    print("")
 
 
 def get_script_directory():
@@ -163,6 +209,7 @@ def export_decompiled_functions(export_dir):
     plt_got_seg = ida_segment.get_segm_by_name(".plt.got")
 
     for func_ea in idautils.Functions():
+        check_cancel_and_save()
         func_name = idc.get_func_name(func_ea)
 
         # Check for Externs segment
@@ -352,8 +399,7 @@ def export_memory(export_dir):
             )
         )
 
-        current_addr = seg_start
-        while current_addr < seg_end:
+        for current_addr in range(seg_start, seg_end, CHUNK_SIZE):
             chunk_end = min(current_addr + CHUNK_SIZE, seg_end)
 
             filename = "{:08X}--{:08X}.txt".format(current_addr, chunk_end)
@@ -370,8 +416,7 @@ def export_memory(export_dir):
                 )
                 f.write("#" + "-" * 76 + "\n")
 
-                addr = current_addr
-                while addr < chunk_end:
+                for addr in range(current_addr, chunk_end, BYTES_PER_LINE):
                     line_bytes = []
                     for i in range(BYTES_PER_LINE):
                         if addr + i < chunk_end:
@@ -384,7 +429,6 @@ def export_memory(export_dir):
                             break
 
                     if not line_bytes:
-                        addr += BYTES_PER_LINE
                         continue
 
                     hex_part = ""
@@ -411,11 +455,9 @@ def export_memory(export_dir):
                         )
                     )
 
-                    addr += BYTES_PER_LINE
                     total_bytes += len(line_bytes)
 
             file_count += 1
-            current_addr = chunk_end
 
     print("\n[*] Memory Export Summary:")
     print(
@@ -428,6 +470,7 @@ def export_memory(export_dir):
 
 def main():
     """主函数"""
+    register_cancel_signal_handlers()
     print("=" * 60)
     print("IDA Export for AI Analysis")
     print("=" * 60)
@@ -445,8 +488,17 @@ def main():
     print("[DBG] input is {}, output is {}".format(args.input, args.output))
     idapro.open_database(args.input, True)
     ida_auto.auto_wait()
-    do_dump(args.output)
-    idapro.close_database()
+    exit_code = 0
+    try:
+        do_dump(args.output)
+    except ExportCanceledError:
+        print("[!] Export canceled by user request")
+        exit_code = 130
+    finally:
+        idapro.close_database()
+
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 def do_dump(output_path=None):
@@ -478,25 +530,15 @@ def do_dump(output_path=None):
     print("[+] Export directory: {}".format(export_dir))
     print("")
 
-    print("[*] Exporting strings...")
-    export_strings(export_dir)
-    print("")
-
-    print("[*] Exporting imports...")
-    export_imports(export_dir)
-    print("")
-
-    print("[*] Exporting exports...")
-    export_exports(export_dir)
-    print("")
-
-    print("[*] Exporting memory...")
-    export_memory(export_dir)
-    print("")
+    run_export_stage("Exporting strings", export_strings, export_dir)
+    run_export_stage("Exporting imports", export_imports, export_dir)
+    run_export_stage("Exporting exports", export_exports, export_dir)
+    run_export_stage("Exporting memory", export_memory, export_dir)
 
     if has_hexrays:
-        print("[*] Exporting decompiled functions...")
-        export_decompiled_functions(export_dir)
+        run_export_stage(
+            "Exporting decompiled functions", export_decompiled_functions, export_dir
+        )
 
     print("")
     print("=" * 60)

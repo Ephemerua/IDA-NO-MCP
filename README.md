@@ -85,12 +85,13 @@ python3 client_example.py -i ./target_binary -H 192.168.1.100 -p 8080 -o result.
 - `POST /analyze`：上传文件并开始分析，完成后返回 zip。
 - `GET /health`：健康检查（包含 `busy` 字段）。
 - `GET /status`：返回当前/最近一次任务状态与 `INP.py` 实时输出（`stdout` / `stderr`）。
+- `POST /cancel`：取消当前任务。服务端会向 `INP.py` 发送取消信号，`INP.py` 收到后会立即保存数据库并退出，不返回 zip。
 
 `/status` 典型字段：
 
 - `task_id`：任务递增 ID
 - `running`：是否正在执行
-- `phase`：`idle` / `running` / `zipping` / `completed` / `failed`
+- `phase`：`idle` / `running` / `zipping` / `canceling` / `canceled` / `completed` / `failed`
 - `busy`：服务是否正忙（与并发锁一致）
 - `stdout` / `stderr`：当前已采集输出
 - `stdout_truncated` / `stderr_truncated`：输出过长时是否被截断

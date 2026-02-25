@@ -7,6 +7,7 @@ import zipfile
 import shutil
 import logging
 import threading
+import signal
 from collections import deque
 from datetime import datetime, timezone
 from flask import Flask, request, send_file, jsonify
@@ -31,7 +32,9 @@ INP_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "INP.py")
 PYTHON_EXEC = os.environ.get("IDA_PYTHON", sys.executable)
 ANALYZE_LOCK = threading.Lock()
 STATUS_LOCK = threading.Lock()
+PROCESS_LOCK = threading.Lock()
 MAX_STATUS_LOG_CHARS = 512 * 1024
+RUNNING_PROCESS = None
 
 TASK_LOGS = {
     "stdout": deque(),
@@ -46,6 +49,7 @@ TASK_LOG_SIZES = {
 TASK_STATUS = {
     "task_id": 0,
     "running": False,
+    "cancel_requested": False,
     "phase": "idle",
     "input_filename": None,
     "started_at": None,
@@ -65,6 +69,7 @@ def start_task_status(input_filename):
     with STATUS_LOCK:
         TASK_STATUS["task_id"] += 1
         TASK_STATUS["running"] = True
+        TASK_STATUS["cancel_requested"] = False
         TASK_STATUS["phase"] = "running"
         TASK_STATUS["input_filename"] = input_filename
         TASK_STATUS["started_at"] = now_iso()
@@ -107,6 +112,22 @@ def get_task_status_snapshot():
         snapshot["stdout"] = "".join(TASK_LOGS["stdout"])
         snapshot["stderr"] = "".join(TASK_LOGS["stderr"])
         return snapshot
+
+
+def is_cancel_requested():
+    with STATUS_LOCK:
+        return bool(TASK_STATUS["cancel_requested"])
+
+
+def set_running_process(process):
+    global RUNNING_PROCESS
+    with PROCESS_LOCK:
+        RUNNING_PROCESS = process
+
+
+def get_running_process():
+    with PROCESS_LOCK:
+        return RUNNING_PROCESS
 
 
 def stream_reader(pipe, stream_name):
@@ -184,6 +205,7 @@ def analyze():
                     text=True,
                     bufsize=1,
                 )
+                set_running_process(process)
             except FileNotFoundError:
                 error_msg = f"Could not execute python interpreter: {PYTHON_EXEC}"
                 logger.critical(error_msg)
@@ -219,6 +241,29 @@ def analyze():
             stderr_thread.join()
 
             if return_code != 0:
+                snapshot = get_task_status_snapshot()
+                if snapshot["cancel_requested"]:
+                    error_msg = "Analysis canceled by user request"
+                    logger.warning(
+                        f"{error_msg}, INP.py exit code: {return_code}"
+                    )
+                    update_task_status(
+                        running=False,
+                        phase="canceled",
+                        finished_at=now_iso(),
+                        exit_code=return_code,
+                        error=error_msg,
+                    )
+                    snapshot = get_task_status_snapshot()
+                    return jsonify(
+                        {
+                            "status": "canceled",
+                            "error": error_msg,
+                            "stderr": snapshot["stderr"],
+                            "stdout": snapshot["stdout"],
+                        }
+                    ), 409
+
                 error_msg = f"INP.py failed with exit code {return_code}"
                 logger.error(error_msg)
                 update_task_status(
@@ -228,7 +273,6 @@ def analyze():
                     exit_code=return_code,
                     error=error_msg,
                 )
-                snapshot = get_task_status_snapshot()
                 return jsonify(
                     {
                         "error": error_msg,
@@ -248,6 +292,23 @@ def analyze():
                 )
                 return jsonify({"error": "INP.py did not create output directory"}), 500
 
+            if is_cancel_requested():
+                update_task_status(
+                    running=False,
+                    phase="canceled",
+                    finished_at=now_iso(),
+                    error="Analysis canceled by user request",
+                )
+                snapshot = get_task_status_snapshot()
+                return jsonify(
+                    {
+                        "status": "canceled",
+                        "error": "Analysis canceled by user request",
+                        "stderr": snapshot["stderr"],
+                        "stdout": snapshot["stdout"],
+                    }
+                ), 409
+
             update_task_status(phase="zipping")
 
             # Zip the output directory into a temporary file
@@ -260,7 +321,11 @@ def analyze():
                 file_count = 0
                 with zipfile.ZipFile(zip_file, "w", zipfile.ZIP_DEFLATED) as zipf:
                     for root, dirs, files in os.walk(output_dir):
+                        if is_cancel_requested():
+                            raise RuntimeError("Canceled by user during zipping")
                         for file in files:
+                            if is_cancel_requested():
+                                raise RuntimeError("Canceled by user during zipping")
                             file_path = os.path.join(root, file)
                             rel_path = os.path.relpath(file_path, output_dir)
                             arcname = os.path.join("ida_export", rel_path)
@@ -289,6 +354,22 @@ def analyze():
             except Exception as e:
                 logger.error(f"Failed to zip or send results: {str(e)}")
                 zip_file.close()  # Clean up manually if error
+                if is_cancel_requested():
+                    update_task_status(
+                        running=False,
+                        phase="canceled",
+                        finished_at=now_iso(),
+                        error="Analysis canceled by user request",
+                    )
+                    snapshot = get_task_status_snapshot()
+                    return jsonify(
+                        {
+                            "status": "canceled",
+                            "error": "Analysis canceled by user request",
+                            "stderr": snapshot["stderr"],
+                            "stdout": snapshot["stdout"],
+                        }
+                    ), 409
                 update_task_status(
                     running=False,
                     phase="failed",
@@ -306,6 +387,7 @@ def analyze():
         )
         return jsonify({"error": f"Unexpected server error: {str(e)}"}), 500
     finally:
+        set_running_process(None)
         ANALYZE_LOCK.release()
 
 
@@ -317,6 +399,40 @@ def health():
             "busy": ANALYZE_LOCK.locked(),
             "inp_script": INP_SCRIPT,
             "python_exec": PYTHON_EXEC,
+        }
+    )
+
+
+@app.route("/cancel", methods=["POST"])
+def cancel():
+    process = get_running_process()
+    snapshot = get_task_status_snapshot()
+
+    if not snapshot["running"]:
+        return jsonify({"error": "No running analyze task to cancel"}), 409
+
+    update_task_status(
+        cancel_requested=True,
+        phase="canceling",
+        error="Cancel requested by user",
+    )
+
+    if process is not None and process.poll() is None:
+        try:
+            if os.name == "nt":
+                process.terminate()
+            else:
+                process.send_signal(signal.SIGINT)
+        except Exception as e:
+            logger.error(f"Failed to send cancel signal: {str(e)}")
+            return jsonify({"error": f"Failed to cancel task: {str(e)}"}), 500
+
+    snapshot = get_task_status_snapshot()
+    return jsonify(
+        {
+            "status": "cancel_requested",
+            "task_id": snapshot["task_id"],
+            "phase": snapshot["phase"],
         }
     )
 

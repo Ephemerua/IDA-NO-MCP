@@ -81,12 +81,13 @@ python3 client_example.py -i ./target_binary -H 192.168.1.100 -p 8080 -o result.
 - `POST /analyze`: upload file and run analysis, returns zip on success.
 - `GET /health`: health check (includes `busy`).
 - `GET /status`: current/latest task status and streamed `INP.py` output (`stdout` / `stderr`).
+- `POST /cancel`: cancel the current task. The server sends a cancel signal to `INP.py`, which immediately saves the database and exits without returning a zip.
 
 Typical `/status` fields:
 
 - `task_id`: incremental task id
 - `running`: whether analysis is in progress
-- `phase`: `idle` / `running` / `zipping` / `completed` / `failed`
+- `phase`: `idle` / `running` / `zipping` / `canceling` / `canceled` / `completed` / `failed`
 - `busy`: server lock state
 - `stdout` / `stderr`: captured output so far
 - `stdout_truncated` / `stderr_truncated`: whether output was trimmed
