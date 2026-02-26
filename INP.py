@@ -23,10 +23,36 @@ import ida_loader
 import idc
 import sys
 import signal
+import time
+import logging
 
 
 CANCEL_REQUESTED = False
 CANCEL_SAVED = False
+
+
+def _configure_logger():
+    logger = logging.getLogger("ida_export_for_ai")
+    if logger.handlers:
+        return logger
+
+    # Best-effort: force line-buffered/write-through stdout when supported.
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(line_buffering=True, write_through=True)
+        except Exception:
+            pass
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.addHandler(handler)
+    return logger
+
+
+LOGGER = _configure_logger()
 
 
 class ExportCanceledError(Exception):
@@ -37,7 +63,7 @@ def register_cancel_signal_handlers():
     def _cancel_handler(signum, frame):
         global CANCEL_REQUESTED
         CANCEL_REQUESTED = True
-        print("[!] Cancel signal received: {}".format(signum))
+        LOGGER.info("[!] Cancel signal received: {}".format(signum))
 
     for sig in [signal.SIGINT, signal.SIGTERM]:
         try:
@@ -51,13 +77,13 @@ def check_cancel_and_save():
     if not CANCEL_REQUESTED:
         return
 
-    print("[!] Cancel requested, saving database immediately...")
+    LOGGER.info("[!] Cancel requested, saving database immediately...")
     if not CANCEL_SAVED:
         saved_idb_path = save_idb_to_default_directory()
         if saved_idb_path:
-            print("[+] IDB saved on cancel: {}".format(saved_idb_path))
+            LOGGER.info("[+] IDB saved on cancel: {}".format(saved_idb_path))
         else:
-            print("[!] Failed to save IDB during cancel")
+            LOGGER.info("[!] Failed to save IDB during cancel")
         CANCEL_SAVED = True
 
     raise ExportCanceledError("Canceled by user")
@@ -65,9 +91,14 @@ def check_cancel_and_save():
 
 def run_export_stage(stage_name, stage_fn, export_dir):
     """统一执行导出阶段：打印阶段日志并执行函数。"""
-    print("[*] {}...".format(stage_name))
+    LOGGER.info("[*] {}...".format(stage_name))
     stage_fn(export_dir)
-    print("")
+    LOGGER.info("")
+
+
+def log_stage(message):
+    """带时间戳且立即刷新的阶段日志。"""
+    LOGGER.info("[{}] {}".format(time.strftime("%H:%M:%S"), message))
 
 
 def get_script_directory():
@@ -157,9 +188,9 @@ def save_idb_to_default_directory():
         except Exception as e:
             save_errors.append("ida_loader.save_database failed: {}".format(e))
 
-    print("[!] Failed to save IDB to default directory")
+    LOGGER.info("[!] Failed to save IDB to default directory")
     for err in save_errors:
-        print("    - {}".format(err))
+        LOGGER.info("    - {}".format(err))
     return None
 
 
@@ -204,6 +235,9 @@ def export_decompiled_functions(export_dir):
     total_funcs = 0
     exported_funcs = 0
     failed_funcs = []
+    skipped_extern = 0
+    skipped_plt = 0
+    skipped_plt_got = 0
 
     plt_seg = ida_segment.get_segm_by_name(".plt")
     plt_got_seg = ida_segment.get_segm_by_name(".plt.got")
@@ -215,16 +249,16 @@ def export_decompiled_functions(export_dir):
         # Check for Externs segment
         seg = ida_segment.getseg(func_ea)
         if seg and seg.type == ida_segment.SEG_XTRN:
-            print("skip extern function {}".format(func_name))
+            skipped_extern += 1
             continue
 
         if plt_seg and (func_ea >= plt_seg.start_ea and func_ea < plt_seg.end_ea):
-            print("skip .plt stub for  {}".format(func_name))
+            skipped_plt += 1
             continue
         if plt_got_seg and (
             func_ea >= plt_got_seg.start_ea and func_ea < plt_got_seg.end_ea
         ):
-            print("skip .plt.got stub for  {}".format(func_name))
+            skipped_plt_got += 1
             continue
         total_funcs += 1
 
@@ -265,23 +299,29 @@ def export_decompiled_functions(export_dir):
             exported_funcs += 1
 
             if exported_funcs % 100 == 0:
-                print("[+] Exported {} functions...".format(exported_funcs))
+                LOGGER.info("[+] Exported {} functions...".format(exported_funcs))
 
         except Exception as e:
             failed_funcs.append((func_ea, func_name, str(e)))
             continue
 
-    print("\n[*] Decompilation Summary:")
-    print("    Total functions: {}".format(total_funcs))
-    print("    Exported: {}".format(exported_funcs))
-    print("    Failed: {}".format(len(failed_funcs)))
+    LOGGER.info("\n[*] Decompilation Summary:")
+    LOGGER.info("    Total functions: {}".format(total_funcs))
+    skipped_total = skipped_extern + skipped_plt + skipped_plt_got
+    LOGGER.info(
+        "    Skipped: {} (extern: {}, .plt: {}, .plt.got: {})".format(
+            skipped_total, skipped_extern, skipped_plt, skipped_plt_got
+        )
+    )
+    LOGGER.info("    Exported: {}".format(exported_funcs))
+    LOGGER.info("    Failed: {}".format(len(failed_funcs)))
 
     if failed_funcs:
         failed_log_path = os.path.join(export_dir, "decompile_failed.txt")
         with open(failed_log_path, "w", encoding="utf-8") as f:
             for addr, name, reason in failed_funcs:
                 f.write("{} {} - {}\n".format(hex(addr), name, reason))
-        print("    Failed list saved to: decompile_failed.txt")
+        LOGGER.info("    Failed list saved to: decompile_failed.txt")
 
 
 def export_strings(export_dir):
@@ -315,8 +355,8 @@ def export_strings(export_dir):
             except Exception as e:
                 continue
 
-    print("[*] Strings Summary:")
-    print("    Total strings exported: {}".format(string_count))
+    LOGGER.info("[*] Strings Summary:")
+    LOGGER.info("    Total strings exported: {}".format(string_count))
 
 
 def export_imports(export_dir):
@@ -344,8 +384,8 @@ def export_imports(export_dir):
 
             ida_nalt.enum_import_names(i, imp_cb)
 
-    print("[*] Imports Summary:")
-    print("    Total imports exported: {}".format(import_count))
+    LOGGER.info("[*] Imports Summary:")
+    LOGGER.info("    Total imports exported: {}".format(import_count))
 
 
 def export_exports(export_dir):
@@ -369,8 +409,8 @@ def export_exports(export_dir):
                 f.write("{}:ordinal_{}\n".format(hex(ea), ordinal))
             export_count += 1
 
-    print("[*] Exports Summary:")
-    print("    Total exports exported: {}".format(export_count))
+    LOGGER.info("[*] Exports Summary:")
+    LOGGER.info("    Total exports exported: {}".format(export_count))
 
 
 def export_memory(export_dir):
@@ -383,17 +423,19 @@ def export_memory(export_dir):
 
     total_bytes = 0
     file_count = 0
+    segment_count = 0
 
     for seg_idx in range(ida_segment.get_segm_qty()):
         seg = ida_segment.getnseg(seg_idx)
         if seg is None:
             continue
 
+        segment_count += 1
         seg_start = seg.start_ea
         seg_end = seg.end_ea
         seg_name = ida_segment.get_segm_name(seg)
 
-        print(
+        LOGGER.debug(
             "[*] Processing segment: {} ({} - {})".format(
                 seg_name, hex(seg_start), hex(seg_end)
             )
@@ -459,21 +501,22 @@ def export_memory(export_dir):
 
             file_count += 1
 
-    print("\n[*] Memory Export Summary:")
-    print(
+    LOGGER.info("\n[*] Memory Export Summary:")
+    LOGGER.info(
         "    Total bytes exported: {} ({:.2f} MB)".format(
             total_bytes, total_bytes / (1024 * 1024)
         )
     )
-    print("    Files created: {}".format(file_count))
+    LOGGER.info("    Segments processed: {}".format(segment_count))
+    LOGGER.info("    Files created: {}".format(file_count))
 
 
 def main():
     """主函数"""
     register_cancel_signal_handlers()
-    print("=" * 60)
-    print("IDA Export for AI Analysis")
-    print("=" * 60)
+    LOGGER.info("=" * 60)
+    LOGGER.info("IDA Export for AI Analysis")
+    LOGGER.info("=" * 60)
 
     parser = argparse.ArgumentParser(description="IDA Export for AI Analysis")
     parser.add_argument("-o", "--output", help="Output directory for exported data")
@@ -485,37 +528,63 @@ def main():
         argv = idc.ARGV[1:] if len(idc.ARGV) > 1 else []
 
     args, _ = parser.parse_known_args(sys.argv)
-    print("[DBG] input is {}, output is {}".format(args.input, args.output))
+    LOGGER.info("[DBG] input is {}, output is {}".format(args.input, args.output))
+
+    total_start = time.monotonic()
+
+    log_stage("open_database start: {}".format(args.input))
+    open_start = time.monotonic()
     idapro.open_database(args.input, True)
+    log_stage(
+        "open_database done, elapsed {:.2f}s".format(time.monotonic() - open_start)
+    )
+
+    log_stage("ida_auto.auto_wait start (may take a long time)...")
+    auto_start = time.monotonic()
     ida_auto.auto_wait()
+    log_stage(
+        "ida_auto.auto_wait done, elapsed {:.2f}s".format(
+            time.monotonic() - auto_start
+        )
+    )
+
     exit_code = 0
     try:
+        log_stage("export stage start")
         do_dump(args.output)
     except ExportCanceledError:
-        print("[!] Export canceled by user request")
+        LOGGER.info("[!] Export canceled by user request")
         exit_code = 130
     finally:
+        log_stage("close_database start")
+        close_start = time.monotonic()
         idapro.close_database()
+        log_stage(
+            "close_database done, elapsed {:.2f}s".format(
+                time.monotonic() - close_start
+            )
+        )
+        log_stage("total elapsed {:.2f}s".format(time.monotonic() - total_start))
 
     if exit_code != 0:
         sys.exit(exit_code)
 
 
 def do_dump(output_path=None):
-    print("[*] Saving IDB to default path...")
+    LOGGER.info("[*] Saving IDB to default path...")
     saved_idb_path = save_idb_to_default_directory()
     if saved_idb_path:
-        print("[+] IDB saved: {}".format(saved_idb_path))
+        LOGGER.info("[+] IDB saved: {}".format(saved_idb_path))
     else:
-        print("[!] Continue export without updating IDB file")
+        LOGGER.info("[!] Continue export without updating IDB file")
 
     if not ida_hexrays.init_hexrays_plugin():
-        print("[!] Hex-Rays decompiler is not available!")
-        print("[!] Strings will still be exported, but no decompilation.")
+        LOGGER.info("[!] Hex-Rays decompiler is not available!")
+        LOGGER.info("[!] Strings will still be exported, but no decompilation.")
         has_hexrays = False
     else:
         has_hexrays = True
-        print("[+] Hex-Rays decompiler initialized")
+        LOGGER.info("[+] Hex-Rays decompiler initialized")
 
     idb_dir = get_idb_directory()
     default_export_dir = os.path.join(idb_dir, "export-for-ai")
@@ -527,8 +596,8 @@ def do_dump(output_path=None):
 
     ensure_dir(export_dir)
 
-    print("[+] Export directory: {}".format(export_dir))
-    print("")
+    LOGGER.info("[+] Export directory: {}".format(export_dir))
+    LOGGER.info("")
 
     run_export_stage("Exporting strings", export_strings, export_dir)
     run_export_stage("Exporting imports", export_imports, export_dir)
@@ -540,11 +609,11 @@ def do_dump(output_path=None):
             "Exporting decompiled functions", export_decompiled_functions, export_dir
         )
 
-    print("")
-    print("=" * 60)
-    print("[+] Export completed!")
-    print("    Output directory: {}".format(export_dir))
-    print("=" * 60)
+    LOGGER.info("")
+    LOGGER.info("=" * 60)
+    LOGGER.info("[+] Export completed!")
+    LOGGER.info("    Output directory: {}".format(export_dir))
+    LOGGER.info("=" * 60)
 
 
 class AIExportPlugin(ida_idaapi.plugin_t):
@@ -555,7 +624,7 @@ class AIExportPlugin(ida_idaapi.plugin_t):
     wanted_hotkey = "Ctrl-Shift-E"
 
     def init(self):
-        print(">>INP loaded<<")
+        LOGGER.info(">>INP loaded<<")
         return ida_idaapi.PLUGIN_KEEP
 
     def run(self, arg):
